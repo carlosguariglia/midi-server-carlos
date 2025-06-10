@@ -1,0 +1,226 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <style>
+        body,html{
+            background: linear-gradient(135deg, #232526 0%, #963be6 100%);
+            /* O prueba: */
+            /* background: linear-gradient(135deg, #00c3ff 0%, #ee0979 100%); */
+            margin: 0;
+            padding: 0;
+            border: 0;
+            font-family: 'Nunito', sans-serif;
+        }
+
+        canvas{
+            margin: 0;
+            padding: 0;
+            display: block;
+            touch-action: none; 
+        }
+    </style>
+    <title>Control MIDI CC</title>
+</head>
+
+<body>
+    <canvas></canvas>
+
+    <script>
+        // Conexión WebSocket con el backend
+        const ws = new WebSocket('ws://localhost:3001');
+        function isOpen(ws) { return ws.readyState === ws.OPEN }
+        if (!isOpen(ws)) {
+            ws.addEventListener('open', (event) => {
+                console.log('Conexión WebSocket abierta');
+            });
+            ws.addEventListener('message', (event) => {
+                console.log(`Mensaje recibido del servidor: ${event.data}`);
+            });
+        }
+
+        // --- NUEVA LÓGICA DE JUEGO ---
+        const frase = "ISFT 151";
+        let letrasReveladas = Array(frase.length).fill(false);
+        let mostrarInscribite = false;
+
+        var canvas = document.querySelector('canvas');
+        var c = canvas.getContext('2d');
+        canvas.width = window.innerWidth;
+        canvas.height = window.innerHeight;
+
+        window.addEventListener('resize', function(){
+            canvas.width = window.innerWidth;
+            canvas.height = window.innerHeight;
+        });
+
+        // Círculos que caen
+        function Circle(x, y, radius, rgb, birth, life, paramType){
+            this.x = x;
+            this.y = y;
+            this.radius = radius;
+            this.vx = 0;
+            this.vy = 2 + Math.random()*2;
+            this.birth = birth;
+            this.life = life;
+            this.opacity = 1;
+            this.paramType = paramType;
+
+            this.draw = function() {
+                c.save();
+                c.beginPath();
+                c.arc(this.x, this.y, this.radius, Math.PI * 2, false);
+                c.shadowColor = 'rgba(' + rgb + ',0.7)';
+                c.shadowBlur = 25;
+                c.fillStyle = 'rgba(' + rgb +','+ this.opacity +')';
+                c.fill();
+                c.lineWidth = 3;
+                c.strokeStyle = 'rgba(255,255,255,0.5)';
+                c.stroke();
+                c.restore();
+            }
+
+            this.update = function(frame){
+                this.y += this.vy;
+                this.opacity = 1- (((frame - this.birth) * 1) / this.life);
+
+                if (this.y - this.radius > canvas.height || frame > this.birth + this.life){
+                    let idx = circleArray.indexOf(this);
+                    if (idx > -1) circleArray.splice(idx, 1);
+                } else{
+                    this.draw();
+                }
+            }
+        }
+
+        var circleArray = [];
+        var colorArray = [
+            '178,255,255',
+            '255,255,255',
+            '255,100,200',
+            '255,255,100',
+            '100,255,180',
+            '255,180,100'
+        ];
+
+        // Genera círculos que caen cada cierto tiempo
+        setInterval(() => {
+            if (mostrarInscribite) return;
+            for (let j = 0; j < 2; j++) { // Cambia 2 por la cantidad deseada
+                let x = Math.random() * (canvas.width - 60) + 30;
+                let y = -30;
+                let radius = 30;
+                let rgb = colorArray[Math.floor(Math.random() * colorArray.length)];
+                let paramType = Math.random() > 0.5 ? 'cutoff' : 'resonance';
+                let life = 500;
+                circleArray.push(new Circle(x, y, radius, rgb, frame, life, paramType));
+            }
+        }, 700);
+
+        // Detecta clic/tap en círculo
+        function handleCircleClick(mx, my) {
+            if (mostrarInscribite) return;
+            for(let i = 0; i < circleArray.length; i++){
+                let circle = circleArray[i];
+                let dx = mx - circle.x;
+                let dy = my - circle.y;
+                if(dx*dx + dy*dy < circle.radius*circle.radius){
+                    // Envía valor MIDI según tipo de parámetro y posición
+                    let ccNumber = circle.paramType === 'cutoff' ? 74 : 42;
+                    let ccValue = Math.round(circle.x * 127 / canvas.width);
+                    let ccMessage = JSON.stringify({ ccNumber, ccValue });
+                    if (isOpen(ws)) ws.send(ccMessage);
+
+                    // Revela la siguiente letra no revelada
+                    let idx = letrasReveladas.findIndex(l => !l);
+                    if (idx !== -1) letrasReveladas[idx] = true;
+
+                    // Si todas reveladas, mostrar INSCRIBITE
+                    if (letrasReveladas.every(l => l)) {
+                        mostrarInscribite = true;
+                        setTimeout(() => {
+                            mostrarInscribite = false;
+                            letrasReveladas = Array(frase.length).fill(false);
+                        }, 5000);
+                    }
+
+                    // Elimina el círculo
+                    circleArray.splice(i,1);
+                    break;
+                }
+            }
+        }
+
+        canvas.addEventListener('mousedown', function(event){
+            let rect = canvas.getBoundingClientRect();
+            let mx = event.clientX - rect.left;
+            let my = event.clientY - rect.top;
+            handleCircleClick(mx, my);
+        });
+
+        canvas.addEventListener('touchstart', function(event){
+            let rect = canvas.getBoundingClientRect();
+            let touch = event.touches[0];
+            let mx = touch.clientX - rect.left;
+            let my = touch.clientY - rect.top;
+            handleCircleClick(mx, my);
+        });
+
+        // Dibuja la frase y el mensaje final con degradado y sombra
+        function drawFrase() {
+            c.save();
+            // Degradado para el texto principal
+            let grad = c.createLinearGradient(
+                canvas.width/2 - 200, canvas.height/2, 
+                canvas.width/2 + 200, canvas.height/2
+            );
+            grad.addColorStop(0, "#00ffe0");
+            grad.addColorStop(0.5, "#fff");
+            grad.addColorStop(1, "#ff00cc");
+
+            c.font = "bold 90px Nunito, sans-serif";
+            c.textAlign = "center";
+            c.textBaseline = "middle";
+            c.shadowColor = "#00ffe0";
+            c.shadowBlur = 30;
+            let display = "";
+            for (let i = 0; i < frase.length; i++) {
+                display += letrasReveladas[i] ? frase[i] : "_";
+            }
+            c.fillStyle = grad;
+            c.fillText(display, canvas.width/2, canvas.height/2);
+
+            if (mostrarInscribite) {
+                let grad2 = c.createLinearGradient(
+                    canvas.width/2 - 150, canvas.height/2 + 100, 
+                    canvas.width/2 + 150, canvas.height/2 + 100
+                );
+                grad2.addColorStop(0, "#fff200");
+                grad2.addColorStop(1, "#ff00cc");
+                c.font = "bold 70px Nunito, sans-serif";
+                c.shadowColor = "#ff00cc";
+                c.shadowBlur = 40;
+                c.fillStyle = grad2;
+                c.fillText("INSCRIBITE YA", canvas.width/2, canvas.height/2 + 110);
+            }
+            c.restore();
+        }
+
+        // Animación principal
+        var frame = 0;
+        function animate() {
+            requestAnimationFrame(animate);
+            frame += 1;
+            c.clearRect(0, 0, canvas.width, canvas.height);
+            for (let i = 0; i < circleArray.length; i++ ){
+                circleArray[i].update(frame);
+            }
+            drawFrase();
+        }
+
+        animate();
+    </script>
+</body>
+</html>
